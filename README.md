@@ -8,21 +8,16 @@ and hand it to the runner that can actually load it. That's all `mm` is.
 
 ```
 $ mm ls
-HANDLE                         ROLE    RUNTIME    QUANT    SIZE    CTX   LAST  NOTE
-mlx/gemma-4-12b-it-qat-4bit    vision  mlx        4bit     10.3G   256k  -
-mlx/maple-2bit                 chat    deepgrove  2bit     5.0G    128k  1h    ternary MoE
-mlx/nanbeige4.2-3b-optiq-4bit  chat    mlx        4bit     3.1G    256k  -
-mlx/lfm2.5-2.6b:4bit           chat    mlx        4bit     1.5G    128k  2h    daily driver
-gguf/ornith-1.0-9b:Q4_K_M      chat    -          Q4_K_M   5.2G    -     1d
-litert/gemma-4-e2b-it-litert-lm chat   -          -        2.4G    -     -
+HANDLE                       ROLE    RUNTIME  QUANT   SIZE   CTX   LAST  NOTE
+mlx/example-3b:4bit           chat    mlx      4bit    1.8G   32k   2h    fast local model
+gguf/example-7b:Q4_K_M        chat    -        Q4_K_M  4.2G   -     1d
+litert/example-2b-litert-lm   chat    -        -       2.1G   -     -
 
-not runnable here (2):
-  hf/docling-layout-heron          163.7M  rt_detr_v2 - no tokenizer, not a text model
-  ct2/faster-whisper-base          141.0M  CTranslate2 weights - needs faster-whisper
+not runnable here (1):
+  ct2/example-speech-model    141.0M  CTranslate2 weights - needs faster-whisper
 
-14 runnable, 46.8G on disk
-  hub      41.8G  /Users/cloud/.cache/huggingface/hub
-  local     5.0G  /Users/cloud/CodeProjects/AI/mlx-lm-deepgrove/maple-2bit-mlx
+3 runnable, 8.1G on disk
+  hub       8.1G  ~/.cache/huggingface/hub
 ```
 
 The `RUNTIME` column only appears once you have registered more than one.
@@ -44,8 +39,8 @@ beside it, so the link can live anywhere as long as the two stay together.
 |---|---|
 | `mm ls [--all] [--names]` | inventory; `--all` adds draft models, `--names` feeds fzf |
 | `mm path <handle>` | print the resolved runnable path |
-| `mm run <handle>` | interactive chat |
-| `mm serve <handle> [--port N]` | HTTP server (default port 8080) |
+| `mm run <handle> [-- RUNNER_ARGS…]` | interactive chat |
+| `mm serve <handle> [--port N] [-- RUNNER_ARGS…]` | HTTP server (default port 8080) |
 | `mm set <scope> k=v …` | write settings; scope is a handle or `@defaults`/`@mlx`/`@llama` |
 | `mm config <handle>` | show resolved settings and where each came from |
 | `mm note <handle> [text]` | why you downloaded it |
@@ -56,13 +51,31 @@ beside it, so the link can live anywhere as long as the two stay together.
 | `mm runtime add\|rm\|ls` | register another venv to launch MLX models from |
 | `mm runtime flag <rt> k=--flag` | teach a runtime a setting only it understands |
 
-Anything after a bare `--` is forwarded to the runner untouched:
+### Passing runner flags
+
+Anything after a bare `--` is forwarded to the selected runner untouched. This
+is how to use a runner option that `mm` does not define, including options added
+by a newer version or a custom fork:
 
 ```sh
-mm run vibe -- --max-tokens 512 --temp 0.7
+mm serve my-model -- --max-tokens 512 --some-new-flag value
 ```
 
-`--dry-run` on `run`/`serve` prints the command without executing it.
+The separator matters: `mm serve my-model --max-tokens 512` asks `mm` itself to
+parse `--max-tokens` and is rejected. Put `mm` options before the separator and
+runner options after it:
+
+```sh
+mm serve my-model --port 9000 --dry-run -- --max-tokens 512
+```
+
+`--dry-run` prints the final command without executing it. For an option you
+want on every launch, use the settings system instead:
+
+```sh
+mm set my-model max_tokens=512             # known, portable setting
+mm set my-model --raw '--some-new-flag 1'  # unknown runner-specific option
+```
 
 ## Handles
 
@@ -166,24 +179,25 @@ alongside its own runtime tends to distribute it. `mm` says so rather than
 silently omitting the repo:
 
 ```
-hf/maple-2bit  -  no snapshot in cache - downloaded with --local-dir? (try: mm root add <dir>)
+hf/example-local-model  -  no snapshot in cache - downloaded with --local-dir?
+                           (try: mm root add <dir>)
 ```
 
 Register the directory and it becomes an ordinary handle:
 
 ```sh
-mm root add ~/CodeProjects/AI/mlx-lm-deepgrove
+mm root add /path/to/project-with-models
 ```
 
 A root is scanned one level deep, so pointing at a project directory finds the
 model inside it without walking the whole tree. The handle grammar doesn't
 change — where the bytes live is not what a `mlx/` or `gguf/` prefix is for — so
-the result is `mlx/maple-2bit` next to everything else, and the cache stub it
-supersedes stops being listed.
+the result is `mlx/example-local-model` next to everything else, and the cache
+stub it supersedes stops being listed.
 
 The org is recovered rather than guessed: the commit sha recorded in the local
-directory is matched against the hub's `refs/main`, so the model is still
-`deepgrove/maple-2bit-mlx` for the purposes of `mm rm` and collision fallback.
+directory is matched against the hub's `refs/main`, so the original repository
+identity is retained for `mm rm` and collision fallback.
 
 ### Serving a LiteRT model
 
@@ -240,17 +254,17 @@ venv is not a global constant — it is a named runtime, and a model can be
 pinned to one:
 
 ```sh
-mm runtime add deepgrove ~/CodeProjects/AI/mlx-lm-deepgrove/.venv
-mm set mlx/maple-2bit runtime=deepgrove
+mm runtime add custom /path/to/mlx-lm-fork/.venv
+mm set mlx/my-model runtime=custom
 ```
 
 ```
 $ mm runtime
-deepgrove    /Users/cloud/CodeProjects/AI/mlx-lm-deepgrove/.venv  (ok)
-               110 architectures, 2 not in mlx: maple, mellum
-               flash_head -> --flash-head (bool, mlx_lm.chat, mlx_lm.server)
-mlx          /Users/cloud/.venvs/mlx  (ok)
-               108 architectures
+custom    /path/to/mlx-lm-fork/.venv  (ok)
+            110 architectures, 2 not in mlx
+            fast_mode -> --fast-mode (bool, mlx_lm.chat, mlx_lm.server)
+mlx       ~/.venvs/mlx  (ok)
+            108 architectures
 ```
 
 Selection is explicit, not inferred — `runtime=` is an ordinary setting, so
@@ -268,18 +282,18 @@ A runtime declares the settings only it understands, so `mm set` can still
 reject a typo without `mm` carrying a table of every downstream mlx-lm:
 
 ```sh
-mm runtime flag deepgrove flash_head=--flash-head --bool --negatable \
+mm runtime flag custom fast_mode=--fast-mode --bool --negatable \
   --tools mlx_lm.chat,mlx_lm.server
-mm set mlx/maple-2bit flash_head=true
+mm set mlx/my-model fast_mode=true
 ```
 
 `--bool` means the flag takes no value; `--negatable` means setting it `false`
-emits `--no-flash-head` rather than nothing. Ask for it on a runtime that has
+emits `--no-fast-mode` rather than nothing. Ask for it on a runtime that has
 never heard of it and you get the same warning as any other unsupported key:
 
 ```
-$ mm run vibe
-mm: warning: flash_head is not supported by mlx_lm.chat (runtime mlx), ignored
+$ mm run my-model
+mm: warning: fast_mode is not supported by mlx_lm.chat (runtime mlx), ignored
 ```
 
 ## Settings
@@ -292,15 +306,15 @@ Sampling settings layer in a cascade. Lowest to highest:
 mm set @defaults temp=0.7 top_p=0.95
 mm set @mlx      min_p=0.05 top_k=40
 mm set @llama    repeat_penalty=1.1
-mm set vibe      temp=0.6 max_tokens=4096
+mm set my-model  temp=0.6 max_tokens=4096
 ```
 
 `mm config <handle>` shows the merged result and which layer each value came
 from, which is usually the question you actually have:
 
 ```
-$ mm config vibe
-mlx/vibethinker-3b-8bit  ->  mlx_lm.chat
+$ mm config my-model
+mlx/my-model  ->  mlx_lm.chat
   max_tokens  4096  model
   min_p       0.05  runner:mlx  ignored - mlx_lm.chat has no min_p
   temp        0.6   model
@@ -328,7 +342,7 @@ A key the chosen tool can't express is **reported on stderr and dropped**, never
 silently ignored:
 
 ```
-$ mm run vibe
+$ mm run my-model
 mm: warning: top_k is not supported by mlx_lm.chat, ignored (try mm serve)
 ```
 
@@ -345,15 +359,15 @@ matters for MLX.
 Anything outside the vocabulary goes through `--raw`, appended verbatim:
 
 ```sh
-mm set vibe --raw '--xtc-probability 0.1 --xtc-threshold 0.1'
-mm set vibe --raw ''          # drop them
+mm set my-model --raw '--xtc-probability 0.1 --xtc-threshold 0.1'
+mm set my-model --raw ''          # drop them
 ```
 
 A lone flag with no argument needs `--raw=`, because argparse reads a bare
 `-…` as the next option unless it contains a space:
 
 ```sh
-mm set @deepgrove --raw=--trust-remote-code
+mm set @custom --raw=--trust-remote-code
 ```
 
 Unlike normal keys, `raw` from every layer accumulates rather than overriding,
@@ -365,8 +379,8 @@ since these are extra arguments rather than competing values.
 drops its own copy rather than passing the flag twice:
 
 ```sh
-mm run vibe -- --temp 0.9
-mm set vibe --clear temp      # or remove it for good
+mm run my-model -- --temp 0.9
+mm set my-model --clear temp      # or remove it for good
 ```
 
 ## Draft models
@@ -409,38 +423,35 @@ can never go stale.
 Overridable via `HF_HUB_CACHE`, `MM_MLX_VENV`, and `MM_LINK_DIR`. `MM_MLX_VENV`
 sets the default `mlx` runtime, which always exists and can't be removed.
 
-## Worked example: Maple on a forked mlx-lm
+## Worked example: a model using a custom mlx-lm runtime
 
-[deepgrove-ai/mlx-lm-deepgrove][dg] is a fork that ships Maple, a 2-bit ternary
-MoE, and downloads the checkpoint into the repo with `--local-dir`. It exercises
-every part of the above at once:
-
-[dg]: https://github.com/deepgrove-ai/mlx-lm-deepgrove
+Suppose an mlx-lm fork lives beside a model downloaded with `--local-dir` and
+adds a boolean `--fast-mode` option. Register the model directory and runtime,
+declare the fork-specific flag, then pin the model to that runtime:
 
 ```sh
-mm root add ~/CodeProjects/AI/mlx-lm-deepgrove
-mm runtime add deepgrove ~/CodeProjects/AI/mlx-lm-deepgrove/.venv
-mm runtime flag deepgrove flash_head=--flash-head --bool --negatable \
+mm root add /path/to/mlx-project
+mm runtime add custom /path/to/mlx-project/.venv
+mm runtime flag custom fast_mode=--fast-mode --bool --negatable \
   --tools mlx_lm.chat,mlx_lm.server
 
-mm set @deepgrove --raw=--trust-remote-code
-mm set mlx/maple-2bit runtime=deepgrove flash_head=true \
-  temp=1.0 top_p=0.95 max_tokens=-1
-mm alias maple mlx/maple-2bit
+mm set @custom --raw=--trust-remote-code
+mm set mlx/my-model runtime=custom fast_mode=true temp=0.7 max_tokens=2048
+mm alias local mlx/my-model
 ```
 
 ```
-$ mm run maple --dry-run
-$ …/mlx-lm-deepgrove/.venv/bin/mlx_lm.chat --model …/maple-2bit-mlx \
-    --flash-head --max-tokens -1 --temp 1.0 --top-p 0.95 --trust-remote-code
+$ mm run local --dry-run
+$ /path/to/mlx-project/.venv/bin/mlx_lm.chat --model /path/to/model \
+    --fast-mode --max-tokens 2048 --temp 0.7 --trust-remote-code
 ```
 
-Worth knowing: the checkpoint bundles its own `maple.py` and names it in
-`config.json`, and mlx-lm executes that file in preference to anything it ships,
-so stock `~/.venvs/mlx` runs this model perfectly well. The fork buys one thing
-— the `--flash-head` plumbing — which measured 276 tok/s against 206 on the same
-prompt here, at 0.6 GB less peak memory. Drop the `runtime=` pin and it still
-runs, just slower. That is the sort of question `mm config` exists to answer.
+Use `mm config local` to see why the runtime and each setting were selected.
+For a one-off experiment, the flag can instead be passed without registering it:
+
+```sh
+mm run local -- --fast-mode
+```
 
 ## Tests
 
