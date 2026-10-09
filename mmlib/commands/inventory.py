@@ -14,13 +14,13 @@ from ..settings import pick_runtime
 
 
 def cmd_ls(args, entries, cfg):
-    runtimes = load_runtimes(cfg)
-
     if args.names:
         for e in entries:
             if e.runnable or args.all:
                 print(e.handle)
         return
+
+    runtimes = load_runtimes(cfg)
 
     shown = [e for e in entries if e.role != "none"]
     if not args.all:

@@ -7,7 +7,9 @@ the short name via -hf and inherits the rest.
 
 from __future__ import annotations
 
+import re
 import shutil
+import subprocess
 
 NAME = "llama"
 FORMATS = ("gguf",)
@@ -21,6 +23,23 @@ FLAGS = {
 }
 
 
+def llama_specs() -> dict[str, str]:
+    """Ask llama.cpp which repo:quant handles it will accept, if available."""
+    if not shutil.which("llama"):
+        return {}
+    try:
+        out = subprocess.run(["llama", "serve", "--cache-list"],
+                             capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return {}
+    specs = {}
+    for line in out.splitlines():
+        m = re.match(r"\s*\d+\.\s+(\S+/\S+):(\S+)", line)
+        if m:
+            specs.setdefault(m.group(1).lower(), f"{m.group(1)}:{m.group(2)}")
+    return specs
+
+
 def available() -> str | None:
     return None if shutil.which("llama") else "llama.cpp CLI not on PATH"
 
@@ -31,8 +50,9 @@ def tool_for(entry, serve: bool, args) -> str:
 
 def command(entry, serve: bool, args, runtime) -> list[str]:
     cmd = ["llama", "serve" if serve else "cli"]
-    if entry.hf_spec:
-        cmd += ["-hf", entry.hf_spec]
+    spec = llama_specs().get(entry.repo.lower()) or entry.hf_spec
+    if spec:
+        cmd += ["-hf", spec]
     else:
         # No repo:quant to hand over, so point at the file and attach the
         # sidecar ourselves.

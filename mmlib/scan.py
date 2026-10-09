@@ -18,7 +18,7 @@ from .classify import classify_dir, classify_weights_dir, dir_size, repo_size
 from .console import die
 from .entry import Entry
 from .paths import HUB, expand
-from .runtimes import load_runtimes
+from .runtimes import Runtime, load_runtimes
 
 # Directories that never hold a model but are always sitting next to one.
 SKIP_DIRS = {"__pycache__", "node_modules", "venv", ".venv", "tests", "benchmarks"}
@@ -152,22 +152,10 @@ def make_slug(name: str) -> str:
 
 def llama_specs() -> dict[str, str]:
     """Ask llama.cpp which repo:quant handles it will accept, if available."""
-    if not shutil.which("llama"):
-        return {}
-    try:
-        out = subprocess.run(["llama", "serve", "--cache-list"],
-                             capture_output=True, text=True, timeout=15).stdout
-    except Exception:
-        return {}
-    specs = {}
-    for line in out.splitlines():
-        m = re.match(r"\s*\d+\.\s+(\S+/\S+):(\S+)", line)
-        if m:
-            specs.setdefault(m.group(1).lower(), f"{m.group(1)}:{m.group(2)}")
-    return specs
+    return runners.llama.llama_specs()
 
 
-def scan(cfg: dict) -> list[Entry]:
+def scan(cfg: dict, runtimes: dict[str, Runtime] | None = None) -> list[Entry]:
     if not HUB.is_dir() and not cfg.get("roots"):
         die(f"no Hugging Face cache at {HUB}")
 
@@ -179,14 +167,6 @@ def scan(cfg: dict) -> list[Entry]:
     entries = [e for e in entries
                if not (e.source == "hub" and e.repo in local_repos
                        and e.reason and e.reason.startswith("no snapshot"))]
-
-    # Prefer llama.cpp's own spelling of the quant over our filename guess.
-    specs = llama_specs()
-    for e in entries:
-        if e.fmt == "gguf":
-            spec = specs.get(e.repo.lower())
-            if spec:
-                e.hf_spec = spec
 
     # Slugs, with the full org-qualified name as a collision tiebreaker.
     # Slugs only have to be unique within their format namespace, so dropping a
@@ -209,7 +189,7 @@ def scan(cfg: dict) -> list[Entry]:
 
     # Last: demote anything no runner can launch, so that every command sees
     # the same answer to "is this runnable" rather than each deciding again.
-    runners.annotate(entries, load_runtimes(cfg))
+    runners.annotate(entries, runtimes if runtimes is not None else load_runtimes(cfg))
     return entries
 
 
@@ -225,5 +205,3 @@ def disk_usage(entries: list[Entry]) -> list[tuple[str, int, Path]]:
         seen.add(e.container)
         rows.append(("local", e.size, e.container))
     return rows
-
-

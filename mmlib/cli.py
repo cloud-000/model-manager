@@ -132,6 +132,6 @@ def main() -> None:
 
     args = p.parse_args(argv)
     args.extra = extra
-    entries = scan(cfg)
+    entries = scan(cfg, runtimes=runtimes)
     migrate_config(cfg, entries)
     args.func(args, entries, cfg)

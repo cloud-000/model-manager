@@ -14,6 +14,7 @@ Nothing here runs a subprocess. Everything is read off the filesystem, because
 from __future__ import annotations
 
 import ast
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -29,6 +30,10 @@ NOT_ARCHITECTURES = {
     "__init__", "base", "cache", "rope_utils", "switch_layers", "activations",
     "bitlinear_layers", "gated_delta", "mla", "pipeline", "ssm",
 }
+
+_MODELS_DIR_CACHE: dict[tuple[Path, str], Path | None] = {}
+_ARCHS_CACHE: dict[tuple[Path, str], set[str]] = {}
+_REMAP_CACHE: dict[tuple[Path, str], dict[str, str]] = {}
 
 
 @dataclass
@@ -79,10 +84,16 @@ class Runtime:
         """
         if self.models_dir_override and package == "mlx_lm":
             return self.models_dir_override if self.models_dir_override.is_dir() else None
+        cache_key = (self.venv, package)
+        if cache_key in _MODELS_DIR_CACHE:
+            return _MODELS_DIR_CACHE[cache_key]
+
+        candidate_dir: Path | None = None
         for sp in sorted(self.venv.glob("lib/python3.*/site-packages")):
             direct = sp / package / "models"
             if direct.is_dir():
-                return direct
+                candidate_dir = direct
+                break
             for finder in sp.glob("__editable___*_finder.py"):
                 try:
                     text = finder.read_text()
@@ -92,8 +103,13 @@ class Runtime:
                 if m:
                     candidate = Path(m.group(1)) / "models"
                     if candidate.is_dir():
-                        return candidate
-        return None
+                        candidate_dir = candidate
+                        break
+            if candidate_dir:
+                break
+
+        _MODELS_DIR_CACHE[cache_key] = candidate_dir
+        return candidate_dir
 
     def architectures(self, package: str = "mlx_lm") -> set[str]:
         """The model_types this runtime ships support for.
@@ -105,13 +121,25 @@ class Runtime:
         """
         if package not in self._archs:
             d = self.models_dir(package)
-            found: set[str] = set()
-            if d is not None:
-                found = {p.stem for p in d.glob("*.py")} | {
-                    p.name for p in d.iterdir() if (p / "__init__.py").is_file()
-                }
+            if d is None:
+                self._archs[package] = set()
+            elif (d, package) in _ARCHS_CACHE:
+                self._archs[package] = _ARCHS_CACHE[(d, package)]
+            else:
+                found: set[str] = set()
+                try:
+                    with os.scandir(d) as it:
+                        for entry in it:
+                            if entry.name.endswith(".py"):
+                                found.add(entry.name[:-3])
+                            elif entry.is_dir():
+                                if (Path(entry.path) / "__init__.py").is_file():
+                                    found.add(entry.name)
+                except OSError:
+                    pass
                 found -= NOT_ARCHITECTURES
-            self._archs[package] = found
+                _ARCHS_CACHE[(d, package)] = found
+                self._archs[package] = found
         return self._archs[package]
 
     def remapping(self, package: str = "mlx_lm") -> dict[str, str]:
@@ -121,20 +149,26 @@ class Runtime:
         upstream aliases a new model_type onto an existing implementation.
         """
         if package not in self._remap:
-            table: dict[str, str] = {}
             d = self.models_dir(package)
-            utils = d.parent / "utils.py" if d else None
-            if utils and utils.is_file():
-                try:
-                    m = re.search(r"^MODEL_REMAPPING\s*(?::[^=]+)?=\s*(\{.*?^\})",
-                                  utils.read_text(), re.S | re.M)
-                    if m:
-                        value = ast.literal_eval(m.group(1))
-                        if isinstance(value, dict):
-                            table = value
-                except (OSError, ValueError, SyntaxError):
-                    pass
-            self._remap[package] = table
+            if d is None:
+                self._remap[package] = {}
+            elif (d, package) in _REMAP_CACHE:
+                self._remap[package] = _REMAP_CACHE[(d, package)]
+            else:
+                table: dict[str, str] = {}
+                utils = d.parent / "utils.py"
+                if utils.is_file():
+                    try:
+                        m = re.search(r"^MODEL_REMAPPING\s*(?::[^=]+)?=\s*(\{.*?^\})",
+                                      utils.read_text(), re.S | re.M)
+                        if m:
+                            value = ast.literal_eval(m.group(1))
+                            if isinstance(value, dict):
+                                table = value
+                    except (OSError, ValueError, SyntaxError):
+                        pass
+                _REMAP_CACHE[(d, package)] = table
+                self._remap[package] = table
         return self._remap[package]
 
     def supports(self, model_type: str | None, package: str = "mlx_lm") -> bool:
