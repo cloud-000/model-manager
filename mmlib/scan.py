@@ -8,13 +8,21 @@ projects that ship a model alongside their own runtime tend to distribute it.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
 from . import runners
-from .classify import classify_dir, classify_weights_dir, dir_size, repo_size
+from .classify import (
+    DirInfo,
+    classify_dir,
+    classify_weights_dir,
+    dir_size,
+    inspect_dir,
+    repo_size,
+)
 from .console import die
 from .entry import Entry
 from .paths import HUB, expand
@@ -32,7 +40,11 @@ def snapshot_dir(repo_dir: Path) -> Path | None:
         if candidate.is_dir():
             return candidate
     snaps = repo_dir / "snapshots"
-    dirs = [d for d in snaps.iterdir() if d.is_dir()] if snaps.is_dir() else []
+    try:
+        with os.scandir(snaps) as it:
+            dirs = [Path(d.path) for d in it if d.is_dir()]
+    except OSError:
+        dirs = []
     return max(dirs, key=lambda d: d.stat().st_mtime) if dirs else None
 
 
@@ -44,11 +56,14 @@ def head_sha(repo_dir: Path) -> str | None:
         return None
 
 
-def with_variants(d: Path, repo: str, source: str, container: Path) -> list[Entry]:
+def with_variants(d: Path, repo: str, source: str, container: Path,
+                  info: DirInfo | None = None) -> list[Entry]:
     """One weights directory plus any quantisation subdirectories under it."""
-    entries = classify_weights_dir(d, repo, None)
-    for sub in sorted(x for x in d.iterdir() if x.is_dir() and x.name not in SKIP_DIRS):
-        child = classify_dir(sub, repo, sub.name)
+    if info is None:
+        info = inspect_dir(d)
+    entries = classify_weights_dir(d, repo, None, info=info)
+    for sub_name, sub_path in sorted(info.subdirs, key=lambda x: x[0]):
+        child = classify_dir(sub_path, repo, sub_name)
         if child:
             entries.append(child)
     for e in entries:
@@ -63,9 +78,17 @@ def with_variants(d: Path, repo: str, source: str, container: Path) -> list[Entr
 
 def scan_hub() -> list[Entry]:
     entries: list[Entry] = []
-    for repo_dir in sorted(HUB.glob("models--*")):
-        if not repo_dir.is_dir():
-            continue
+    repo_dirs: list[Path] = []
+    try:
+        with os.scandir(HUB) as it:
+            for entry in it:
+                if entry.name.startswith("models--") and entry.is_dir():
+                    repo_dirs.append(Path(entry.path))
+    except OSError:
+        return []
+    repo_dirs.sort(key=lambda p: p.name)
+
+    for repo_dir in repo_dirs:
         repo = repo_dir.name[len("models--"):].replace("--", "/", 1)
         snap = snapshot_dir(repo_dir)
         if snap is None:
@@ -96,8 +119,15 @@ def hub_index() -> tuple[dict[str, str], dict[str, str]]:
     """
     by_sha: dict[str, str] = {}
     by_name: dict[str, str] = {}
-    for repo_dir in HUB.glob("models--*"):
-        repo = repo_dir.name[len("models--"):].replace("--", "/", 1)
+    try:
+        with os.scandir(HUB) as it:
+            repo_entries = [entry for entry in it if entry.name.startswith("models--") and entry.is_dir()]
+    except OSError:
+        return by_sha, by_name
+
+    for entry in repo_entries:
+        repo_dir = Path(entry.path)
+        repo = entry.name[len("models--"):].replace("--", "/", 1)
         sha = head_sha(repo_dir)
         if sha:
             by_sha[sha] = repo
@@ -109,14 +139,21 @@ def hub_index() -> tuple[dict[str, str], dict[str, str]]:
 
 def local_repo_id(d: Path, by_sha: dict[str, str], by_name: dict[str, str]) -> str:
     trees = d / ".cache/huggingface/trees"
-    if trees.is_dir():
-        for f in trees.glob("*.json"):
-            if f.stem in by_sha:
-                return by_sha[f.stem]
+    try:
+        with os.scandir(trees) as it:
+            for f in it:
+                if f.name.endswith(".json"):
+                    stem = f.name[:-5]
+                    if stem in by_sha:
+                        return by_sha[stem]
+    except OSError:
+        pass
     return by_name.get(d.name.lower(), f"local/{d.name}")
 
 
 def scan_roots(roots: list[str]) -> list[Entry]:
+    if not roots:
+        return []
     entries: list[Entry] = []
     by_sha, by_name = hub_index()
     for raw in roots:
@@ -124,15 +161,20 @@ def scan_roots(roots: list[str]) -> list[Entry]:
         if not root.is_dir():
             continue
         # The root itself may be a model directory, or may merely contain some.
-        candidates = [root] + sorted(
-            d for d in root.iterdir()
-            if d.is_dir() and not d.name.startswith(".") and d.name not in SKIP_DIRS
-        )
+        candidates = [root]
+        try:
+            with os.scandir(root) as it:
+                candidates.extend(
+                    Path(entry.path) for entry in sorted(it, key=lambda e: e.name)
+                    if entry.is_dir() and not entry.name.startswith(".") and entry.name not in SKIP_DIRS
+                )
+        except OSError:
+            pass
         for d in candidates:
-            has_weights = (d / "config.json").is_file() or any(d.glob("*.gguf"))
-            if not has_weights:
+            info = inspect_dir(d)
+            if not (info.has_config or bool(info.ggufs)):
                 continue
-            found = with_variants(d, local_repo_id(d, by_sha, by_name), "local", d)
+            found = with_variants(d, local_repo_id(d, by_sha, by_name), "local", d, info=info)
             for e in found:
                 if e.source == "local" and e.size == 0:
                     e.size = dir_size(d)
@@ -197,7 +239,15 @@ def disk_usage(entries: list[Entry]) -> list[tuple[str, int, Path]]:
     """Bytes per source, for the footer of `mm ls`."""
     rows = []
     if HUB.is_dir():
-        rows.append(("hub", sum(repo_size(d) for d in HUB.glob("models--*") if d.is_dir()), HUB))
+        total_hub = 0
+        try:
+            with os.scandir(HUB) as it:
+                for entry in it:
+                    if entry.name.startswith("models--") and entry.is_dir():
+                        total_hub += repo_size(Path(entry.path))
+        except OSError:
+            pass
+        rows.append(("hub", total_hub, HUB))
     seen: set[Path] = set()
     for e in entries:
         if e.source != "local" or e.container is None or e.container in seen:
