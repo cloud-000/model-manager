@@ -29,12 +29,18 @@ def build_parser(known_scopes, known_keys) -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_ls)
 
     s = sub.add_parser("path", help="print the resolved runnable path")
-    s.add_argument("handle")
+    s.add_argument("handle", nargs="?", default=None,
+                   help="model handle, alias, or path")
+    s.add_argument("--path", type=str, default=None,
+                   help="path to a local model directory or weights file")
     s.set_defaults(func=cmd_path)
 
     for name, serving in (("run", False), ("serve", True)):
         s = sub.add_parser(name, help=f"{'serve' if serving else 'chat with'} a model")
-        s.add_argument("handle")
+        s.add_argument("handle", nargs="?", default=None,
+                       help="model handle, alias, or directory path")
+        s.add_argument("--path", type=str, default=None,
+                       help="path to a local model directory or weights file")
         s.add_argument("--port", type=int, default=8080)
         s.add_argument("--draft", action="store_true", help="use paired draft model")
         s.add_argument("--vlm", action="store_true", help="force mlx-vlm")

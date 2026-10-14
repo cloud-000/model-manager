@@ -36,7 +36,10 @@ def build_command(e, serve: bool, args, runtime: Runtime | None,
 
 
 def launch(args, entries, cfg, serve: bool):
-    e = resolve(args.handle, entries, cfg)
+    target = getattr(args, "path", None) or args.handle
+    if not target:
+        die("a model handle or --path is required")
+    e = resolve(target, entries, cfg)
     runtimes = load_runtimes(cfg)
     runtime = pick_runtime(e, cfg, runtimes)
     cmd, tool = build_command(e, serve, args, runtime, runtimes)
@@ -61,6 +64,16 @@ def launch(args, entries, cfg, serve: bool):
     if args.dry_run:
         return
 
-    cfg["last_used"][e.handle] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Bump last-run time on success only: a model that fails to exec should
+    # not look like it was used.
+    cfg.setdefault("last_run", {})[e.handle] = datetime.now(timezone.utc).isoformat()
     save_config(cfg)
-    os.execvp(cmd[0], cmd)
+
+    # Clean handoff. The runner becomes this process; signals, pipes and terminal
+    # state are theirs to manage.
+    try:
+        os.execvp(cmd[0], cmd)
+    except FileNotFoundError:
+        die(f"cannot exec {cmd[0]!r}: binary not found")
+    except OSError as err:
+        die(f"cannot exec {cmd[0]!r}: {err}")

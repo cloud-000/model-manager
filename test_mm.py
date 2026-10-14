@@ -16,9 +16,10 @@ import unittest
 from pathlib import Path
 
 from mmlib import runners, scan as scan_mod
-from mmlib.runners import litert
+from mmlib.runners import litert, transformers
 from mmlib.classify import classify_dir
 from mmlib.entry import Entry
+from mmlib.resolve import resolve
 from mmlib.runtimes import Runtime, parse_flag, resolve_runtime
 from mmlib.scan import make_slug, scan
 from mmlib.settings import (parse_value, resolve_settings, runner_name,
@@ -359,9 +360,13 @@ class TestRunners(unittest.TestCase):
         self.assertEqual(runners.for_format("litert").NAME, "litert")
         self.assertIsNone(runners.for_format("ct2"))
 
-    def test_no_two_runners_claim_the_same_format(self):
-        seen = [f for r in runners.RUNNERS for f in r.FORMATS]
-        self.assertEqual(len(seen), len(set(seen)))
+    def test_hf_falls_back_to_transformers_when_mlx_unavailable(self):
+        real_avail = runners.mlx.available
+        try:
+            runners.mlx.available = lambda: "mlx only runs on macOS"
+            self.assertEqual(runners.for_format("hf").NAME, "transformers")
+        finally:
+            runners.mlx.available = real_avail
 
     def test_flag_map_is_assembled_from_every_runner(self):
         merged = runners.flag_map()
@@ -432,7 +437,7 @@ class TestLitertRunner(unittest.TestCase):
 class TestScopes(unittest.TestCase):
     def test_singleton_runners_get_a_scope_each(self):
         found = scopes({"mlx": Runtime("mlx", Path("/x"))})
-        self.assertEqual(found, ("@defaults", "@mlx", "@llama", "@litert"))
+        self.assertEqual(found, ("@defaults", "@mlx", "@transformers", "@llama", "@litert"))
 
     def test_extra_runtimes_appear_alongside(self):
         found = scopes({"mlx": Runtime("mlx", Path("/x")),
@@ -446,6 +451,35 @@ class TestScopes(unittest.TestCase):
         self.assertEqual(runner_name(lit, None), "litert")
         self.assertEqual(runner_name(gguf, Runtime("deepgrove", Path("/y"))),
                          "deepgrove")
+
+
+class TestResolvePaths(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_resolve_directory_path(self):
+        m = make_model_dir(self.d / "my-model")
+        e = resolve(str(m), [], {"aliases": {}})
+        self.assertEqual(e.source, "local")
+        self.assertEqual(e.path, m)
+        self.assertEqual(e.slug, "my-model")
+
+    def test_resolve_gguf_file(self):
+        f = write(self.d / "test-model.gguf", "fake gguf")
+        e = resolve(str(f), [], {"aliases": {}})
+        self.assertEqual(e.source, "local")
+        self.assertEqual(e.path, f)
+        self.assertEqual(e.fmt, "gguf")
+
+    def test_resolve_remote_hf_repo(self):
+        e = resolve("hf/LiquidAI/LFM2.5-350M", [], {"aliases": {}})
+        self.assertEqual(e.fmt, "hf")
+        self.assertEqual(e.repo, "LiquidAI/LFM2.5-350M")
+        self.assertEqual(e.slug, "lfm2.5-350m")
 
 
 class TestParseValue(unittest.TestCase):

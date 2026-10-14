@@ -14,6 +14,11 @@ LINK_DIR = Path(os.environ.get("MM_LINK_DIR") or Path.home() / "models")
 # predates the registry and because it is the one people override per-shell.
 DEFAULT_MLX_VENV = Path(os.environ.get("MM_MLX_VENV") or Path.home() / ".venvs/mlx")
 
+# The default venv for the cross-platform transformers runner.
+DEFAULT_TRANSFORMERS_VENV = Path(
+    os.environ.get("MM_TRANSFORMERS_VENV") or Path.home() / ".venvs/transformers"
+)
+
 
 def expand(path: str | Path) -> Path:
     """Config files hold ~-relative paths; the rest of mm wants them absolute."""

@@ -24,18 +24,21 @@ it cannot run this particular thing.
 
 from __future__ import annotations
 
-from . import litert, llama, mlx
+from . import litert, llama, mlx, transformers
 
-RUNNERS = (mlx, llama, litert)
+RUNNERS = (mlx, transformers, llama, litert)
 NAMES = tuple(r.NAME for r in RUNNERS)
 
 
 def for_format(fmt: str):
-    """The runner that claims this format, if any."""
-    for runner in RUNNERS:
-        if fmt in runner.FORMATS:
-            return runner
-    return None
+    """The runner that claims this format, prioritizing available runners."""
+    candidates = [r for r in RUNNERS if fmt in r.FORMATS]
+    if not candidates:
+        return None
+    for r in candidates:
+        if r.available() is None:
+            return r
+    return candidates[0]
 
 
 def flag_map() -> dict[str, dict[str, str]]:

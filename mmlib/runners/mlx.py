@@ -6,6 +6,8 @@ what the runtime registry in runtimes.py exists for.
 
 from __future__ import annotations
 
+import sys
+
 from ..console import die
 from ..runtimes import unsupported_reason
 
@@ -32,7 +34,9 @@ FLAGS = {
 
 
 def available() -> str | None:
-    """Always: which venv is a per-model question, resolved at launch."""
+    """Always on macOS: which venv is a per-model question, resolved at launch."""
+    if sys.platform != "darwin":
+        return "mlx only runs on macOS (Apple Silicon)"
     return None
 
 
@@ -43,17 +47,18 @@ def check(entry, runtimes) -> str | None:
 def tool_for(entry, serve: bool, args) -> str:
     vlm = getattr(args, "vlm", False) or (
         entry.role == "vision" and not getattr(args, "lm", False))
-    return ("mlx_vlm." if vlm else "mlx_lm.") + ("server" if serve else "chat")
+    if serve:
+        return "mlx_vlm.server" if vlm else "mlx_lm.server"
+    return "mlx_vlm.chat" if vlm else "mlx_lm.chat"
 
 
 def command(entry, serve: bool, args, runtime) -> list[str]:
-    cmd = [runtime.tool(tool_for(entry, serve, args)), "--model", str(entry.path)]
+    if runtime is None:
+        die(f"cannot launch {entry.handle}: no MLX runtime resolved")
+    tool = tool_for(entry, serve, args)
+    cmd = [runtime.tool(tool), "--model", str(entry.path)]
     if serve:
         cmd += ["--port", str(args.port)]
-        if args.draft:
-            if not entry.draft:
-                die(f"no draft model paired with {entry.handle}")
-            cmd += ["--draft-model", str(entry.draft)]
-    elif args.draft:
-        die("mlx_lm.chat has no --draft-model; use `mm serve --draft` instead")
+    if getattr(args, "draft", False) and entry.draft:
+        cmd += ["--draft-model", str(entry.draft.path)]
     return cmd

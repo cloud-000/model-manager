@@ -70,7 +70,10 @@ def cmd_ls(args, entries, cfg):
 
 
 def cmd_path(args, entries, cfg):
-    print(resolve(args.handle, entries, cfg).path)
+    target = getattr(args, "path", None) or args.handle
+    if not target:
+        die("a model handle or --path is required")
+    print(resolve(target, entries, cfg).path)
 
 
 def cmd_link(args, entries, cfg):
