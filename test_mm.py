@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 from mmlib import runners, scan as scan_mod
-from mmlib.runners import litert, transformers
+from mmlib.runners import hf, litert
 from mmlib.classify import classify_dir
 from mmlib.entry import Entry
 from mmlib.resolve import resolve

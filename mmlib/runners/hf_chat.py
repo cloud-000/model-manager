@@ -3,6 +3,12 @@
 
 import argparse
 import sys
+from pathlib import Path
+
+# Remove runner directory from sys.path to avoid shadowing third-party packages
+runners_dir = str(Path(__file__).resolve().parent)
+sys.path = [p for p in sys.path if str(Path(p).resolve()) != runners_dir]
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer
 

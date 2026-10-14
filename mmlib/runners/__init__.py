@@ -24,9 +24,9 @@ it cannot run this particular thing.
 
 from __future__ import annotations
 
-from . import litert, llama, mlx, transformers
+from . import hf, litert, llama, mlx
 
-RUNNERS = (mlx, transformers, llama, litert)
+RUNNERS = (mlx, hf, llama, litert)
 NAMES = tuple(r.NAME for r in RUNNERS)
 
 
