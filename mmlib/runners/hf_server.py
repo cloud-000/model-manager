@@ -130,7 +130,7 @@ class OpenAIChatHandler(BaseHTTPRequestHandler):
             self.send_header("Connection", "keep-alive")
             self.end_headers()
 
-            streamer = TextIteratorStreamer(TOKENIZER, skip_prompt=True)
+            streamer = TextIteratorStreamer(TOKENIZER, skip_prompt=True, skip_special_tokens=True)
             gen_kwargs["streamer"] = streamer
 
             thread = threading.Thread(target=MODEL.generate, kwargs=gen_kwargs)
@@ -231,7 +231,7 @@ def main():
     TOKENIZER = AutoTokenizer.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
 
     device_map = "auto" if torch.cuda.is_available() else None
-    torch_dtype = (
+    dtype = (
         torch.bfloat16
         if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         else (
@@ -247,7 +247,7 @@ def main():
     MODEL = AutoModelForCausalLM.from_pretrained(
         args.model,
         device_map=device_map,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         trust_remote_code=args.trust_remote_code,
     )
     if device_map is None:
